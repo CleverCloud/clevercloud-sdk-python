@@ -29,14 +29,33 @@ class CleverCloudClient:
         *,
         base_url: str | None = None,
         timeout: float = 30.0,
+        ca_bundle: str | None = None,
+        client_cert: str | tuple[str, str] | tuple[str, str, str] | None = None,
+        verify_ssl: bool = True,
     ) -> None:
         self._auth = auth
         self._base_url = base_url or auth.get_base_url()
         self._timeout = timeout
+        self._ca_bundle = ca_bundle
+        self._client_cert = client_cert
+        self._verify_ssl = verify_ssl
         self._client: httpx.AsyncClient | None = None
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            # Prepare SSL verification
+            # - ca_bundle: path to custom CA bundle file to verify server certificate
+            # - verify_ssl: True (default CA), False (disable verification)
+            verify: bool | str
+            if self._ca_bundle:
+                verify = self._ca_bundle
+            else:
+                verify = self._verify_ssl
+
+            # Prepare client certificate for mTLS
+            # - client_cert: path to cert file, or (cert, key), or (cert, key, password)
+            cert = self._client_cert
+
             self._client = httpx.AsyncClient(
                 base_url=self._base_url,
                 timeout=self._timeout,
@@ -44,6 +63,8 @@ class CleverCloudClient:
                     "Accept": "application/json",
                     "Content-Type": "application/json",
                 },
+                verify=verify,
+                cert=cert,
             )
         return self._client
 
