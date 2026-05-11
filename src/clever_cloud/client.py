@@ -60,7 +60,7 @@ class CleverCloudClient:
                 base_url=self._base_url,
                 timeout=self._timeout,
                 headers={
-                    "Accept": "application/json",
+                    "Accept": "*/*",
                     "Content-Type": "application/json",
                 },
                 verify=verify,
@@ -97,7 +97,10 @@ class CleverCloudClient:
             )
         if response.status_code == 204:
             return {}
-        return response.json()
+        content_type = response.headers.get("content-type", "")
+        if "json" in content_type:
+            return response.json()
+        return response.text
 
     async def _request(
         self,
@@ -107,10 +110,16 @@ class CleverCloudClient:
         json: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         client = self._get_client()
         request = client.build_request(
-            method=method, url=path, json=json, data=data, params=params
+            method=method,
+            url=path,
+            json=json,
+            data=data,
+            params=params,
+            headers=headers,
         )
         request = self._auth.apply_to_request(request)
         response = await client.send(request)
