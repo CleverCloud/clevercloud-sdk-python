@@ -29,6 +29,7 @@ class OAuthCredentials(Auth):
     consumer_secret: str
     token: str
     secret: str
+    base_url: str | None = None
 
     def get_authorization_header(self) -> str:
         """OAuth header with PLAINTEXT signature: consumerSecret%26tokenSecret."""
@@ -41,7 +42,7 @@ class OAuthCredentials(Auth):
         return f"OAuth {', '.join(parts)}"
 
     def get_base_url(self) -> str:
-        return "https://api.clever-cloud.com"
+        return self.base_url or "https://api.clever-cloud.com"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,9 +50,10 @@ class ApiTokenCredentials(Auth):
     """API Token for the Clever Cloud API Bridge."""
 
     token: str
+    base_url: str | None = None
 
     def get_authorization_header(self) -> str:
         return f"Bearer {self.token}"
 
     def get_base_url(self) -> str:
-        return "https://api-bridge.clever-cloud.com"
+        return self.base_url or "https://api-bridge.clever-cloud.com"
