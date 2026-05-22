@@ -26,7 +26,20 @@ from clever_cloud.exceptions import (
     HttpError,
     OAuthError,
 )
-from clever_cloud.models import Application, Domain, Profile, TcpRedirection
+from clever_cloud.models import (
+    Application,
+    Domain,
+    MemberKind,
+    NetworkGroup,
+    NetworkGroupMember,
+    NetworkGroupPeer,
+    PeerCreated,
+    PeerKind,
+    PeerRole,
+    Profile,
+    TcpRedirection,
+    WireguardEndpoint,
+)
 from clever_cloud.oauth_dance import OAuthConsumer, OAuthDance, RequestToken
 
 __version__ = "0.1.0"
@@ -37,8 +50,16 @@ __all__ = [
     "ApiTokenCredentials",
     "Application",
     "Domain",
+    "MemberKind",
+    "NetworkGroup",
+    "NetworkGroupMember",
+    "NetworkGroupPeer",
+    "PeerCreated",
+    "PeerKind",
+    "PeerRole",
     "Profile",
     "TcpRedirection",
+    "WireguardEndpoint",
     "OAuthDance",
     "OAuthConsumer",
     "RequestToken",

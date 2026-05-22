@@ -1,7 +1,8 @@
 """Data models for Clever Cloud API responses."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Any, Self
 
 
@@ -98,6 +99,152 @@ class TcpRedirection:
         return cls(
             namespace=data.get("namespace", "default"),
             port=data.get("port", 0),
+        )
+
+
+class MemberKind(str, Enum):
+    """Kind of a NetworkGroup member."""
+
+    ADDON = "ADDON"
+    APPLICATION = "APPLICATION"
+    EXTERNAL = "EXTERNAL"
+    LOADBALANCER = "LOADBALANCER"
+
+
+class PeerRole(str, Enum):
+    """Role of a NetworkGroup peer."""
+
+    CLIENT = "CLIENT"
+    SERVER = "SERVER"
+
+
+class PeerKind(str, Enum):
+    """Kind of a NetworkGroup peer."""
+
+    CLEVER = "CLEVER"
+    EXTERNAL = "EXTERNAL"
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkGroupMember:
+    """Member of a NetworkGroup (GET .../members/{memberId})."""
+
+    id: str
+    domain_name: str
+    kind: MemberKind
+    label: str
+
+    @classmethod
+    def from_api_response(cls, data: dict[str, Any]) -> Self:
+        return cls(
+            id=data.get("id", ""),
+            domain_name=data.get("domainName", ""),
+            kind=MemberKind(data.get("kind", "EXTERNAL")),
+            label=data.get("label", ""),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WireguardEndpoint:
+    """Wireguard endpoint (private/public address pair)."""
+
+    private_address: str
+    public_address: str
+
+    @classmethod
+    def from_api_response(cls, data: dict[str, Any]) -> Self:
+        return cls(
+            private_address=str(data.get("privateAddress", "")),
+            public_address=str(data.get("publicAddress", "")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkGroupPeer:
+    """Peer of a NetworkGroup (CleverPeer or ExternalPeer flattened)."""
+
+    id: str
+    public_key: str
+    parent_member: str
+    endpoint: WireguardEndpoint | None
+    hostname: str
+    label: str
+    kind: PeerKind
+    hv: str | None
+
+    @classmethod
+    def from_api_response(cls, data: dict[str, Any]) -> Self:
+        endpoint_data = data.get("endpoint")
+        endpoint = (
+            WireguardEndpoint.from_api_response(endpoint_data)
+            if isinstance(endpoint_data, dict)
+            else None
+        )
+        # CleverPeer has "hv" field; ExternalPeer does not.
+        hv = data.get("hv")
+        kind = PeerKind.CLEVER if hv is not None else PeerKind.EXTERNAL
+        return cls(
+            id=data.get("id", ""),
+            public_key=data.get("publicKey", ""),
+            parent_member=data.get("parentMember", ""),
+            endpoint=endpoint,
+            hostname=data.get("hostname", ""),
+            label=data.get("label", ""),
+            kind=kind,
+            hv=hv,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkGroup:
+    """NetworkGroup from GET .../networkgroups/{networkGroupId}."""
+
+    id: str
+    owner_id: str
+    label: str
+    description: str
+    dns_sanitized_label: str
+    network_ip: str
+    last_allocated_ip: str
+    version: int
+    members: list[NetworkGroupMember] = field(default_factory=list)
+    peers: list[NetworkGroupPeer] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_api_response(cls, data: dict[str, Any]) -> Self:
+        return cls(
+            id=data.get("id", ""),
+            owner_id=data.get("ownerId", ""),
+            label=data.get("label", ""),
+            description=data.get("description", ""),
+            dns_sanitized_label=data.get("dnsSanitizedLabel", ""),
+            network_ip=data.get("networkIp", ""),
+            last_allocated_ip=data.get("lastAllocatedIp", ""),
+            version=data.get("version", 0),
+            members=[
+                NetworkGroupMember.from_api_response(m)
+                for m in data.get("members") or []
+            ],
+            peers=[
+                NetworkGroupPeer.from_api_response(p) for p in data.get("peers") or []
+            ],
+            tags=list(data.get("tags") or []),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PeerCreated:
+    """Response of POST .../peers and .../external-peers."""
+
+    peer_id: str
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_api_response(cls, data: dict[str, Any]) -> Self:
+        return cls(
+            peer_id=data.get("id", data.get("peerId", "")),
+            raw=data,
         )
 
 

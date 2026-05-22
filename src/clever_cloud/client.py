@@ -6,7 +6,18 @@ import httpx
 
 from clever_cloud.auth import Auth
 from clever_cloud.exceptions import AuthenticationError, HttpError
-from clever_cloud.models import Application, Domain, Profile, TcpRedirection
+from clever_cloud.models import (
+    Application,
+    Domain,
+    MemberKind,
+    NetworkGroup,
+    NetworkGroupMember,
+    NetworkGroupPeer,
+    PeerCreated,
+    PeerRole,
+    Profile,
+    TcpRedirection,
+)
 
 
 class CleverCloudClient:
@@ -331,6 +342,292 @@ class CleverCloudClient:
             if e.status_code == 404:
                 return []
             raise
+
+    async def create_networkgroup(
+        self,
+        owner_id: str,
+        *,
+        label: str,
+        description: str | None = None,
+        ng_id: str | None = None,
+        tags: list[str] | None = None,
+        members: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Create a NetworkGroup.
+
+        POST /v4/networkgroups/organisations/{ownerId}/networkgroups
+        Returns 202 with no body.
+
+        Args:
+            owner_id: Organisation ID (orga_*).
+            label: NG label.
+            description: Optional description.
+            ng_id: Pre-defined NG id (server generates one if omitted).
+            tags: Optional tags.
+            members: Optional initial members (list of WannabeNetworkgroupMember
+                dicts: {id, domainName, kind, label?}).
+        """
+        body: dict[str, Any] = {"label": label}
+        if description is not None:
+            body["description"] = description
+        if ng_id is not None:
+            body["id"] = ng_id
+        if tags is not None:
+            body["tags"] = tags
+        if members is not None:
+            body["members"] = members
+        await self._request(
+            "POST",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups",
+            json=body,
+        )
+
+    async def get_networkgroup(
+        self,
+        owner_id: str,
+        ng_id: str,
+    ) -> NetworkGroup:
+        """Get a NetworkGroup.
+
+        GET /v4/networkgroups/organisations/{ownerId}/networkgroups/{networkGroupId}
+        """
+        data = await self._request(
+            "GET",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups/{ng_id}",
+        )
+        return NetworkGroup.from_api_response(data)
+
+    async def delete_networkgroup(
+        self,
+        owner_id: str,
+        ng_id: str,
+    ) -> None:
+        """Delete a NetworkGroup.
+
+        DELETE /v4/networkgroups/organisations/{ownerId}/networkgroups/{networkGroupId}
+        """
+        await self._request(
+            "DELETE",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups/{ng_id}",
+        )
+
+    async def search_networkgroup_components(
+        self,
+        owner_id: str,
+        *,
+        query: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search NetworkGroup components (NGs, members, peers).
+
+        GET /v4/networkgroups/organisations/{ownerId}/networkgroups/search
+
+        Returns the raw component list — the response is a oneOf union
+        (CleverPeer | ExternalPeer | Member | NetworkGroup) that callers
+        typically discriminate by inspecting fields.
+        """
+        params = {"query": query} if query is not None else None
+        return await self._request(
+            "GET",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups/search",
+            params=params,
+        )
+
+    async def create_networkgroup_member(
+        self,
+        owner_id: str,
+        ng_id: str,
+        *,
+        member_id: str,
+        domain_name: str,
+        kind: MemberKind | str,
+        label: str | None = None,
+    ) -> None:
+        """Add a member to a NetworkGroup.
+
+        POST /v4/networkgroups/organisations/{ownerId}/networkgroups/{networkGroupId}/members
+        Returns 202 with no body.
+
+        Args:
+            owner_id: Organisation ID (orga_*).
+            ng_id: NetworkGroup ID (ng_*).
+            member_id: ID of the entity to add (app_*, addon_*, ...).
+            domain_name: Internal domain name to assign to the member.
+            kind: ADDON | APPLICATION | EXTERNAL | LOADBALANCER.
+            label: Optional human-readable label.
+        """
+        body: dict[str, Any] = {
+            "id": member_id,
+            "domainName": domain_name,
+            "kind": kind.value if isinstance(kind, MemberKind) else kind,
+        }
+        if label is not None:
+            body["label"] = label
+        await self._request(
+            "POST",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups/{ng_id}/members",
+            json=body,
+        )
+
+    async def get_networkgroup_member(
+        self,
+        owner_id: str,
+        ng_id: str,
+        member_id: str,
+    ) -> NetworkGroupMember:
+        """Get a member of a NetworkGroup.
+
+        GET .../networkgroups/{networkGroupId}/members/{memberId}
+        """
+        data = await self._request(
+            "GET",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups/{ng_id}/members/{member_id}",
+        )
+        return NetworkGroupMember.from_api_response(data)
+
+    async def delete_networkgroup_member(
+        self,
+        owner_id: str,
+        ng_id: str,
+        member_id: str,
+    ) -> None:
+        """Remove a member from a NetworkGroup.
+
+        DELETE .../networkgroups/{networkGroupId}/members/{memberId}
+        """
+        await self._request(
+            "DELETE",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups/{ng_id}/members/{member_id}",
+        )
+
+    async def list_networkgroup_peers(
+        self,
+        owner_id: str,
+        ng_id: str,
+    ) -> list[NetworkGroupPeer]:
+        """List peers of a NetworkGroup.
+
+        GET .../networkgroups/{networkGroupId}/peers
+        """
+        data = await self._request(
+            "GET",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups/{ng_id}/peers",
+        )
+        return [NetworkGroupPeer.from_api_response(p) for p in data or []]
+
+    async def get_networkgroup_peer(
+        self,
+        owner_id: str,
+        ng_id: str,
+        peer_id: str,
+    ) -> NetworkGroupPeer:
+        """Get a peer of a NetworkGroup.
+
+        GET .../networkgroups/{networkGroupId}/peers/{peerId}
+        """
+        data = await self._request(
+            "GET",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups/{ng_id}/peers/{peer_id}",
+        )
+        return NetworkGroupPeer.from_api_response(data)
+
+    async def create_networkgroup_peer(
+        self,
+        owner_id: str,
+        ng_id: str,
+        *,
+        peer_id: str,
+        parent_member: str,
+        peer_role: PeerRole | str,
+        peer_kind: str = "CLEVER",
+        public_key: str | None = None,
+        ip: str | None = None,
+        port: int | None = None,
+        hostname: str | None = None,
+        label: str | None = None,
+        hv: str | None = None,
+        parent_event: str | None = None,
+    ) -> PeerCreated:
+        """Add a peer to a member of a NetworkGroup.
+
+        POST .../networkgroups/{networkGroupId}/peers
+        """
+        body: dict[str, Any] = {
+            "id": peer_id,
+            "parentMember": parent_member,
+            "peerRole": peer_role.value if isinstance(peer_role, PeerRole) else peer_role,
+            "peerKind": peer_kind,
+        }
+        for key, value in (
+            ("publicKey", public_key),
+            ("ip", ip),
+            ("port", port),
+            ("hostname", hostname),
+            ("label", label),
+            ("hv", hv),
+            ("parentEvent", parent_event),
+        ):
+            if value is not None:
+                body[key] = value
+        data = await self._request(
+            "POST",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups/{ng_id}/peers",
+            json=body,
+        )
+        return PeerCreated.from_api_response(data or {})
+
+    async def delete_networkgroup_peer(
+        self,
+        owner_id: str,
+        ng_id: str,
+        peer_id: str,
+    ) -> None:
+        """Delete a peer of a NetworkGroup.
+
+        DELETE .../networkgroups/{networkGroupId}/peers/{peerId}
+        """
+        await self._request(
+            "DELETE",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups/{ng_id}/peers/{peer_id}",
+        )
+
+    async def create_networkgroup_external_peer(
+        self,
+        owner_id: str,
+        ng_id: str,
+        *,
+        parent_member: str,
+        peer_role: PeerRole | str,
+        public_key: str,
+        label: str,
+        ip: str | None = None,
+        port: int | None = None,
+        hostname: str | None = None,
+        parent_event: str | None = None,
+    ) -> PeerCreated:
+        """Add an external peer to a member of a NetworkGroup.
+
+        POST .../networkgroups/{networkGroupId}/external-peers
+        """
+        body: dict[str, Any] = {
+            "parentMember": parent_member,
+            "peerRole": peer_role.value if isinstance(peer_role, PeerRole) else peer_role,
+            "publicKey": public_key,
+            "label": label,
+        }
+        for key, value in (
+            ("ip", ip),
+            ("port", port),
+            ("hostname", hostname),
+            ("parentEvent", parent_event),
+        ):
+            if value is not None:
+                body[key] = value
+        data = await self._request(
+            "POST",
+            f"/v4/networkgroups/organisations/{owner_id}/networkgroups/{ng_id}/external-peers",
+            json=body,
+        )
+        return PeerCreated.from_api_response(data or {})
 
     async def get_primary_domain(
         self,
