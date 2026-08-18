@@ -5,7 +5,8 @@ Example with API Token (simplest):
 
     async with CleverCloudClient(ApiTokenCredentials(token="...")) as client:
         profile = await client.get_profile()
-        print(f"Hello, {profile.name}!")
+        # name is optional on the API side, hence the fallback
+        print(f"Hello, {profile.name or profile.email}!")
 
 Example with OAuth (full access):
     from clever_cloud import CleverCloudClient, OAuthCredentials
@@ -18,13 +19,23 @@ Example with OAuth (full access):
         app = await client.create_application(owner_id="...", name="my-app", instance_slug="node")
 """
 
-from clever_cloud.auth import ApiTokenCredentials, OAuthCredentials
+from clever_cloud.auth import (
+    ApiTokenCredentials,
+    Auth,
+    OAuthCredentials,
+    SignatureMethod,
+)
 from clever_cloud.client import CleverCloudClient
 from clever_cloud.exceptions import (
     AuthenticationError,
+    AuthorizationError,
     CleverCloudError,
     HttpError,
+    InvalidResponseError,
+    NotFoundError,
     OAuthError,
+    RateLimitError,
+    TransportError,
 )
 from clever_cloud.models import (
     Application,
@@ -42,29 +53,36 @@ from clever_cloud.models import (
 )
 from clever_cloud.oauth_dance import OAuthConsumer, OAuthDance, RequestToken
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
-    "CleverCloudClient",
-    "OAuthCredentials",
     "ApiTokenCredentials",
     "Application",
+    "Auth",
+    "AuthenticationError",
+    "AuthorizationError",
+    "CleverCloudClient",
+    "CleverCloudError",
     "Domain",
+    "HttpError",
+    "InvalidResponseError",
     "MemberKind",
     "NetworkGroup",
     "NetworkGroupMember",
     "NetworkGroupPeer",
+    "NotFoundError",
+    "OAuthConsumer",
+    "OAuthCredentials",
+    "OAuthDance",
+    "OAuthError",
     "PeerCreated",
     "PeerKind",
     "PeerRole",
     "Profile",
-    "TcpRedirection",
-    "WireguardEndpoint",
-    "OAuthDance",
-    "OAuthConsumer",
+    "RateLimitError",
     "RequestToken",
-    "CleverCloudError",
-    "AuthenticationError",
-    "HttpError",
-    "OAuthError",
+    "SignatureMethod",
+    "TcpRedirection",
+    "TransportError",
+    "WireguardEndpoint",
 ]
