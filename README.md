@@ -174,7 +174,8 @@ uv run ruff check .    # lint
 uv run mypy            # strict type checking
 ```
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes, including breaking changes.
+See [CHANGELOG.md](CHANGELOG.md) for release notes, including breaking changes,
+and [RELEASING.md](RELEASING.md) for how a new version is published.
 
 ## License
 

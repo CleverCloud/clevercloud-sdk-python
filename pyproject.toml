@@ -48,6 +48,7 @@ Issues = "https://github.com/CleverCloud/clevercloud-sdk-python/issues"
 include = [
     "/src",
     "/tests",
+    "/CHANGELOG.md",
 ]
 
 [tool.hatch.build.targets.wheel]
