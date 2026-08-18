@@ -18,7 +18,8 @@ from clever_cloud import CleverCloudClient, ApiTokenCredentials
 
 async with CleverCloudClient(ApiTokenCredentials(token="...")) as client:
     profile = await client.get_profile()
-    print(f"Hello, {profile.name}!")
+    # name is optional on the API side, hence the fallback
+    print(f"Hello, {profile.name or profile.email}!")
 ```
 
 You can also use OAuth credentials:
