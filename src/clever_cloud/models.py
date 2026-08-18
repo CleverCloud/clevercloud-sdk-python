@@ -91,7 +91,21 @@ def _flag(data: Mapping[str, Any], key: str) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Profile:
-    """User profile from ``GET /v2/self``."""
+    """User profile from ``GET /v2/self``.
+
+    Only ``id`` and ``email`` are guaranteed by the API. Every other field is
+    ``None`` when the account does not carry it, so it is never confused with a
+    value the user actually set.
+
+    Attributes:
+        id: Account identifier (``user_*``).
+        email: Account email address.
+        creation_date: When the account was created, as a timezone-aware UTC
+            datetime, or ``None`` if the API did not report it.
+        email_validated: Whether the email address has been confirmed.
+        is_linked_to_github: Whether a GitHub account is linked.
+        preferred_mfa: Preferred MFA kind, e.g. ``"TOTP"``, or ``None``.
+    """
 
     id: str
     email: str
@@ -148,7 +162,13 @@ class Profile:
 
 @dataclass(frozen=True, slots=True)
 class Domain:
-    """Domain (vhost) for an application."""
+    """Domain (vhost) for an application.
+
+    Attributes:
+        domain: Fully-qualified domain name, without a trailing slash.
+        is_primary: Whether this is the application's primary domain. Set by
+            the method that produced it, not by the payload.
+    """
 
     domain: str
     is_primary: bool
@@ -164,7 +184,13 @@ class Domain:
 
 @dataclass(frozen=True, slots=True)
 class TcpRedirection:
-    """TCP redirection for an application."""
+    """TCP redirection for an application.
+
+    Attributes:
+        namespace: Redirection namespace, e.g. ``"cleverapps"``.
+        port: Port the platform assigned. Never a placeholder: a payload
+            without a port is rejected.
+    """
 
     namespace: str
     port: int
@@ -214,7 +240,15 @@ def _parse_enum(enum_cls: type[_E], raw: Any, *, model: str, key: str) -> _E:
 
 @dataclass(frozen=True, slots=True)
 class NetworkGroupMember:
-    """Member of a NetworkGroup (``GET .../members/{memberId}``)."""
+    """Member of a NetworkGroup (``GET .../members/{memberId}``).
+
+    Attributes:
+        id: Identifier of the underlying entity (``app_*``, ``addon_*``, ...).
+        domain_name: Internal domain name assigned inside the NetworkGroup.
+        kind: What the member is. An unknown kind is rejected rather than
+            silently coerced.
+        label: Human-readable label, or ``None``.
+    """
 
     id: str
     domain_name: str
@@ -239,7 +273,12 @@ class NetworkGroupMember:
 
 @dataclass(frozen=True, slots=True)
 class WireguardEndpoint:
-    """Wireguard endpoint (private/public address pair)."""
+    """Wireguard endpoint (private/public address pair).
+
+    Attributes:
+        private_address: Address inside the NetworkGroup, or ``None``.
+        public_address: Publicly reachable address, or ``None``.
+    """
 
     private_address: str | None = None
     public_address: str | None = None
@@ -255,7 +294,18 @@ class WireguardEndpoint:
 
 @dataclass(frozen=True, slots=True)
 class NetworkGroupPeer:
-    """Peer of a NetworkGroup (CleverPeer or ExternalPeer flattened)."""
+    """Peer of a NetworkGroup (CleverPeer and ExternalPeer, flattened).
+
+    Attributes:
+        id: Peer identifier.
+        parent_member: Member this peer belongs to.
+        kind: ``CLEVER`` when the API reports an ``hv`` field, ``EXTERNAL``
+            otherwise.
+        public_key: Wireguard public key, or ``None``.
+        endpoint: Private/public address pair, or ``None`` if the peer is not
+            connected yet.
+        hv: Hypervisor identifier; set only on a Clever peer.
+    """
 
     id: str
     parent_member: str
@@ -295,6 +345,14 @@ class NetworkGroup:
 
     Collections are exposed as tuples so the model is deeply immutable, as
     ``frozen=True`` advertises.
+
+    Attributes:
+        id: NetworkGroup identifier (``ng_*``).
+        owner_id: Owning organisation (``orga_*``).
+        version: Configuration version, incremented by the platform on change.
+        members: Members attached to the group.
+        peers: Peers, Clever and external alike.
+        network_ip: CIDR the group allocates addresses from, or ``None``.
     """
 
     id: str
@@ -334,7 +392,13 @@ class NetworkGroup:
 
 @dataclass(frozen=True, slots=True)
 class PeerCreated:
-    """Response of ``POST .../peers`` and ``.../external-peers``."""
+    """Response of ``POST .../peers`` and ``.../external-peers``.
+
+    Attributes:
+        peer_id: Identifier of the created peer.
+        raw: The full payload, as a read-only mapping, for fields this SDK does
+            not model yet.
+    """
 
     peer_id: str
     raw: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
@@ -351,7 +415,19 @@ class PeerCreated:
 
 @dataclass(frozen=True, slots=True)
 class Application:
-    """Application from the Clever Cloud API."""
+    """Application from the Clever Cloud API.
+
+    Only ``id`` and ``name`` are guaranteed; the rest is ``None`` when the
+    payload does not carry it, which happens on the trimmed-down objects some
+    endpoints return.
+
+    Attributes:
+        id: Application identifier (``app_*``).
+        name: Application name.
+        deploy_url: Git remote to push to, or ``None``.
+        creation_date: Timezone-aware UTC datetime, or ``None``.
+        state: Current state reported by the API, or ``None``.
+    """
 
     id: str
     name: str

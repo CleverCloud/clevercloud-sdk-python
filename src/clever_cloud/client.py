@@ -104,6 +104,9 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
 class CleverCloudClient:
     """Async client for the Clever Cloud API.
 
+    Use it as an async context manager so the underlying connection pool is
+    closed on exit. The client is reusable after ``close()``.
+
     Example:
         credentials = OAuthCredentials(
             consumer_key="...", consumer_secret="...",
@@ -112,7 +115,31 @@ class CleverCloudClient:
 
         async with CleverCloudClient(credentials) as client:
             profile = await client.get_profile()
-            app = await client.create_application(...)
+            app = await client.create_application(
+                owner_id="orga_...", name="my-app", instance_slug="node"
+            )
+
+    Errors:
+        Every method can raise the following, all deriving from
+        :class:`CleverCloudError`. Individual methods only document what they
+        add on top of this.
+
+        - :class:`AuthenticationError` — HTTP 401, credentials missing or
+          invalid.
+        - :class:`AuthorizationError` — HTTP 403, credentials valid but the
+          account may not perform this operation.
+        - :class:`NotFoundError` — HTTP 404, the organisation, application or
+          resource does not exist.
+        - :class:`RateLimitError` — HTTP 429; carries ``retry_after``. Only
+          raised once the automatic retries are exhausted.
+        - :class:`HttpError` — any other error status.
+        - :class:`TransportError` — network, timeout or TLS failure.
+        - :class:`InvalidResponseError` — the response could not be decoded, was
+          an unexpected redirection, or did not match the endpoint's contract.
+
+    Note:
+        Idempotent requests are retried automatically on transient failures;
+        see the ``max_retries`` argument.
     """
 
     def __init__(
@@ -335,7 +362,14 @@ class CleverCloudClient:
         return base * (0.5 + random.random() / 2)  # noqa: S311 - jitter, not crypto
 
     async def get_profile(self) -> Profile:
-        """Get the authenticated user's profile."""
+        """Get the authenticated user's profile.
+
+        ``GET /v2/self``
+
+        Returns:
+            The profile. Only ``id`` and ``email`` are guaranteed; every other
+            field is ``None`` when the account does not carry it.
+        """
         data = await self._request("GET", "/v2/self")
         return Profile.from_api_response(data)
 
@@ -344,7 +378,16 @@ class CleverCloudClient:
 
         The catalogue is cached for the lifetime of the client, since it changes
         rarely and every ``instance_slug`` resolution would otherwise re-download
-        it. Pass ``refresh=True`` to force a new fetch.
+        it.
+
+        Args:
+            refresh: Fetch the catalogue again instead of reusing the cache.
+
+        Returns:
+            The raw instance entries, as returned by the API.
+
+        Raises:
+            InvalidResponseError: If the API does not return a list.
         """
         if self._instances_cache is None or refresh:
             data = await self._request("GET", "/v2/products/instances")
@@ -360,11 +403,17 @@ class CleverCloudClient:
         Args:
             slug: Instance slug like "static", "node", "python", etc.
 
+        Versions are compared naturally, so ``10`` is newer than ``9``.
+
         Returns:
-            Tuple of (instance_type, version, variant_id)
+            Tuple of ``(instance_type, version, variant_id)`` for the newest
+            enabled version of that runtime.
 
         Raises:
-            ValueError: If the slug cannot be resolved
+            ValueError: If no enabled instance matches the slug. The message
+                lists the slugs that are available.
+            InvalidResponseError: If the matching catalogue entry is missing
+                the fields needed to create an application.
         """
         instances = await self.list_instances()
         matching = [
@@ -440,6 +489,16 @@ class CleverCloudClient:
 
         Either instance_slug OR (instance_type, instance_version, instance_variant)
         must be provided.
+
+        Returns:
+            The created application, including its ``id`` and ``deploy_url``.
+
+        Raises:
+            ValueError: If neither the slug nor the full instance triplet is
+                given, or if an identifier is empty.
+            NotFoundError: If the organisation does not exist.
+            HttpError: If the API rejects the application, for instance on a
+                duplicate name or an unavailable zone.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         if instance_slug:
@@ -504,6 +563,10 @@ class CleverCloudClient:
             app_id: Application ID to redeploy
             commit: Specific commit to deploy (optional)
             use_cache: Whether to use build cache (optional)
+
+        Raises:
+            NotFoundError: If the organisation or the application does not
+                exist.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         app = encode_path_segment(app_id, name="app_id")
@@ -534,7 +597,13 @@ class CleverCloudClient:
             namespace: TCP redirection namespace (default: "cleverapps")
 
         Returns:
-            TcpRedirection with namespace and assigned port
+            The redirection, with the port the platform assigned.
+
+        Raises:
+            NotFoundError: If the organisation or the application does not
+                exist.
+            HttpError: If no port is available in that namespace, or the
+                application already has a redirection there.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         app = encode_path_segment(app_id, name="app_id")
@@ -622,6 +691,14 @@ class CleverCloudClient:
             tags: Optional tags.
             members: Optional initial members (list of WannabeNetworkgroupMember
                 dicts: {id, domainName, kind, label?}).
+
+        Note:
+            The API answers 202 with no body: creation is asynchronous, so a
+            successful call means the request was accepted, not that the
+            NetworkGroup is ready. Poll :meth:`get_networkgroup` to observe it.
+
+        Raises:
+            NotFoundError: If the organisation does not exist.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         body: dict[str, Any] = {"label": label}
@@ -640,9 +717,21 @@ class CleverCloudClient:
         )
 
     async def get_networkgroup(self, owner_id: str, ng_id: str) -> NetworkGroup:
-        """Get a NetworkGroup.
+        """Get a NetworkGroup, with its members and peers.
 
-        GET /v4/networkgroups/organisations/{ownerId}/networkgroups/{networkGroupId}
+        ``GET /v4/networkgroups/organisations/{ownerId}/networkgroups/{networkGroupId}``
+
+        Args:
+            owner_id: Organisation ID (``orga_*``).
+            ng_id: NetworkGroup ID (``ng_*``).
+
+        Returns:
+            The NetworkGroup, whose ``members``, ``peers`` and ``tags`` are
+            tuples.
+
+        Raises:
+            NotFoundError: If the organisation or the NetworkGroup does not
+                exist.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         ng = encode_path_segment(ng_id, name="ng_id")
@@ -652,9 +741,17 @@ class CleverCloudClient:
         return NetworkGroup.from_api_response(data)
 
     async def delete_networkgroup(self, owner_id: str, ng_id: str) -> None:
-        """Delete a NetworkGroup.
+        """Delete a NetworkGroup and everything it contains.
 
-        DELETE /v4/networkgroups/organisations/{ownerId}/networkgroups/{networkGroupId}
+        ``DELETE /v4/networkgroups/organisations/{ownerId}/networkgroups/{networkGroupId}``
+
+        Args:
+            owner_id: Organisation ID (``orga_*``).
+            ng_id: NetworkGroup ID (``ng_*``).
+
+        Raises:
+            NotFoundError: If the organisation or the NetworkGroup does not
+                exist.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         ng = encode_path_segment(ng_id, name="ng_id")
@@ -670,11 +767,21 @@ class CleverCloudClient:
     ) -> list[dict[str, Any]]:
         """Search NetworkGroup components (NGs, members, peers).
 
-        GET /v4/networkgroups/organisations/{ownerId}/networkgroups/search
+        ``GET /v4/networkgroups/organisations/{ownerId}/networkgroups/search``
 
-        Returns the raw component list — the response is a oneOf union
-        (CleverPeer | ExternalPeer | Member | NetworkGroup) that callers
-        typically discriminate by inspecting fields.
+        Args:
+            owner_id: Organisation ID (``orga_*``).
+            query: Free-text filter. Omit it to list every component.
+
+        Returns:
+            The raw component list, as returned by the API. The response is a
+            ``oneOf`` union (CleverPeer | ExternalPeer | Member | NetworkGroup)
+            which this SDK deliberately does not discriminate: inspect the
+            dictionaries yourself, typically on the ``kind`` or ``peerKind``
+            key. An empty result is an empty list.
+
+        Raises:
+            InvalidResponseError: If the API does not return a list.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         params = {"query": query} if query is not None else None
@@ -710,8 +817,17 @@ class CleverCloudClient:
             ng_id: NetworkGroup ID (ng_*).
             member_id: ID of the entity to add (app_*, addon_*, ...).
             domain_name: Internal domain name to assign to the member.
-            kind: ADDON | APPLICATION | EXTERNAL | LOADBALANCER.
+            kind: ADDON | APPLICATION | EXTERNAL | LOADBALANCER, as a
+                :class:`MemberKind` or its string value.
             label: Optional human-readable label.
+
+        Note:
+            The API answers 202 with no body, so a successful call means the
+            request was accepted, not that the member is attached.
+
+        Raises:
+            NotFoundError: If the organisation or the NetworkGroup does not
+                exist.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         ng = encode_path_segment(ng_id, name="ng_id")
@@ -731,9 +847,22 @@ class CleverCloudClient:
     async def get_networkgroup_member(
         self, owner_id: str, ng_id: str, member_id: str
     ) -> NetworkGroupMember:
-        """Get a member of a NetworkGroup.
+        """Get one member of a NetworkGroup.
 
-        GET .../networkgroups/{networkGroupId}/members/{memberId}
+        ``GET .../networkgroups/{networkGroupId}/members/{memberId}``
+
+        Args:
+            owner_id: Organisation ID (``orga_*``).
+            ng_id: NetworkGroup ID (``ng_*``).
+            member_id: ID of the member (``app_*``, ``addon_*``, ...).
+
+        Returns:
+            The member and the internal domain name assigned to it.
+
+        Raises:
+            NotFoundError: If the NetworkGroup or the member does not exist.
+            InvalidResponseError: If the API reports a member kind this SDK
+                version does not know.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         ng = encode_path_segment(ng_id, name="ng_id")
@@ -749,7 +878,15 @@ class CleverCloudClient:
     ) -> None:
         """Remove a member from a NetworkGroup.
 
-        DELETE .../networkgroups/{networkGroupId}/members/{memberId}
+        ``DELETE .../networkgroups/{networkGroupId}/members/{memberId}``
+
+        Args:
+            owner_id: Organisation ID (``orga_*``).
+            ng_id: NetworkGroup ID (``ng_*``).
+            member_id: ID of the member to remove.
+
+        Raises:
+            NotFoundError: If the NetworkGroup or the member does not exist.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         ng = encode_path_segment(ng_id, name="ng_id")
@@ -762,9 +899,20 @@ class CleverCloudClient:
     async def list_networkgroup_peers(
         self, owner_id: str, ng_id: str
     ) -> list[NetworkGroupPeer]:
-        """List peers of a NetworkGroup.
+        """List the peers of a NetworkGroup.
 
-        GET .../networkgroups/{networkGroupId}/peers
+        ``GET .../networkgroups/{networkGroupId}/peers``
+
+        Args:
+            owner_id: Organisation ID (``orga_*``).
+            ng_id: NetworkGroup ID (``ng_*``).
+
+        Returns:
+            The peers, Clever and external alike; check ``peer.kind`` to tell
+            them apart. A NetworkGroup with no peer yields an empty list.
+
+        Raises:
+            NotFoundError: If the NetworkGroup does not exist.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         ng = encode_path_segment(ng_id, name="ng_id")
@@ -781,9 +929,21 @@ class CleverCloudClient:
     async def get_networkgroup_peer(
         self, owner_id: str, ng_id: str, peer_id: str
     ) -> NetworkGroupPeer:
-        """Get a peer of a NetworkGroup.
+        """Get one peer of a NetworkGroup.
 
-        GET .../networkgroups/{networkGroupId}/peers/{peerId}
+        ``GET .../networkgroups/{networkGroupId}/peers/{peerId}``
+
+        Args:
+            owner_id: Organisation ID (``orga_*``).
+            ng_id: NetworkGroup ID (``ng_*``).
+            peer_id: ID of the peer.
+
+        Returns:
+            The peer. ``kind`` is ``CLEVER`` when the API reports an ``hv``
+            field, ``EXTERNAL`` otherwise.
+
+        Raises:
+            NotFoundError: If the NetworkGroup or the peer does not exist.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         ng = encode_path_segment(ng_id, name="ng_id")
@@ -811,9 +971,33 @@ class CleverCloudClient:
         hv: str | None = None,
         parent_event: str | None = None,
     ) -> PeerCreated:
-        """Add a peer to a member of a NetworkGroup.
+        """Add a Clever peer to a member of a NetworkGroup.
 
-        POST .../networkgroups/{networkGroupId}/peers
+        ``POST .../networkgroups/{networkGroupId}/peers``
+
+        Args:
+            owner_id: Organisation ID (``orga_*``).
+            ng_id: NetworkGroup ID (``ng_*``).
+            peer_id: ID to assign to the peer.
+            parent_member: ID of the member this peer belongs to.
+            peer_role: CLIENT or SERVER, as a :class:`PeerRole` or its value.
+            peer_kind: Peer kind; ``"CLEVER"`` by default.
+            public_key: Wireguard public key.
+            ip: Peer IP address.
+            port: Wireguard port.
+            hostname: Peer hostname.
+            label: Human-readable label.
+            hv: Hypervisor identifier, for a Clever peer.
+            parent_event: Event this peer creation belongs to.
+
+        Returns:
+            The created peer id, plus the raw payload in ``raw`` for fields
+            this SDK does not model.
+
+        Raises:
+            NotFoundError: If the NetworkGroup or the parent member does not
+                exist.
+            InvalidResponseError: If the API does not return a peer id.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         ng = encode_path_segment(ng_id, name="ng_id")
@@ -846,7 +1030,15 @@ class CleverCloudClient:
     ) -> None:
         """Delete a peer of a NetworkGroup.
 
-        DELETE .../networkgroups/{networkGroupId}/peers/{peerId}
+        ``DELETE .../networkgroups/{networkGroupId}/peers/{peerId}``
+
+        Args:
+            owner_id: Organisation ID (``orga_*``).
+            ng_id: NetworkGroup ID (``ng_*``).
+            peer_id: ID of the peer to delete.
+
+        Raises:
+            NotFoundError: If the NetworkGroup or the peer does not exist.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         ng = encode_path_segment(ng_id, name="ng_id")
@@ -872,7 +1064,30 @@ class CleverCloudClient:
     ) -> PeerCreated:
         """Add an external peer to a member of a NetworkGroup.
 
-        POST .../networkgroups/{networkGroupId}/external-peers
+        Use this for a machine outside Clever Cloud — a laptop or an on-premise
+        server — joining the NetworkGroup with its own Wireguard key.
+
+        ``POST .../networkgroups/{networkGroupId}/external-peers``
+
+        Args:
+            owner_id: Organisation ID (``orga_*``).
+            ng_id: NetworkGroup ID (``ng_*``).
+            parent_member: ID of the member this peer belongs to.
+            peer_role: CLIENT or SERVER, as a :class:`PeerRole` or its value.
+            public_key: Wireguard public key of the external machine.
+            label: Human-readable label.
+            ip: Peer IP address.
+            port: Wireguard port.
+            hostname: Peer hostname.
+            parent_event: Event this peer creation belongs to.
+
+        Returns:
+            The created peer id, plus the raw payload in ``raw``.
+
+        Raises:
+            NotFoundError: If the NetworkGroup or the parent member does not
+                exist.
+            InvalidResponseError: If the API does not return a peer id.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         ng = encode_path_segment(ng_id, name="ng_id")

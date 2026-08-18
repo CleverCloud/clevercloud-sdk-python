@@ -112,14 +112,31 @@ class Auth(ABC):
             url: Absolute request URL, including its query string.
             body_params: Form-encoded body parameters, which take part in the
                 OAuth signature when the body is ``x-www-form-urlencoded``.
+
+        Returns:
+            The value to set as the ``Authorization`` header.
         """
 
     @abstractmethod
     def get_base_url(self) -> str:
-        """Return the default API base URL for this credential kind."""
+        """Return the default API base URL for this credential kind.
+
+        Returns:
+            The base URL used when the client is created without an explicit
+            ``base_url``.
+        """
 
     def apply_to_request(self, request: httpx.Request) -> httpx.Request:
-        """Sign ``request`` in place and return it."""
+        """Sign ``request`` in place and return it.
+
+        Args:
+            request: The request to authenticate. Its method, URL and
+                form-encoded body all take part in an OAuth signature, so it
+                must be fully built before this is called.
+
+        Returns:
+            The same request, with its ``Authorization`` header set.
+        """
         request.headers["Authorization"] = self.get_authorization_header(
             request.method,
             str(request.url),
@@ -182,8 +199,22 @@ class OAuthCredentials(Auth):
     ) -> str:
         """Build a fully signed OAuth 1.0a ``Authorization`` header.
 
+        Args:
+            method: HTTP method of the request being signed.
+            url: Absolute request URL, including its query string.
+            body_params: Form-encoded body parameters, when the request carries
+                an ``x-www-form-urlencoded`` body.
+            timestamp: Override the OAuth timestamp. For tests only.
+            nonce: Override the OAuth nonce. For tests only.
+
         ``timestamp`` and ``nonce`` are generated per call; they are only
         accepted as arguments to make signatures reproducible in tests.
+
+        Returns:
+            The header value, e.g. ``OAuth oauth_consumer_key="...", ...``.
+            Every value is percent-encoded, and the signature covers the method,
+            URL, query string and form body, so it is valid for this request
+            only.
         """
         oauth_params = {
             "oauth_consumer_key": self.consumer_key,
@@ -224,7 +255,15 @@ class OAuthCredentials(Auth):
         return base64.b64encode(digest).decode("ascii")
 
     def is_expired(self, *, now: datetime | None = None) -> bool:
-        """Whether the access token is past its expiration date, if known."""
+        """Whether the access token is past its expiration date.
+
+        Args:
+            now: Reference time; defaults to the current UTC time.
+
+        Returns:
+            ``False`` when no expiration date is known — the API does not
+            always report one, so this is not proof the token still works.
+        """
         if self.expiration_date is None:
             return False
         return (now or datetime.now(tz=UTC)) >= self.expiration_date
@@ -253,6 +292,18 @@ class ApiTokenCredentials(Auth):
         *,
         body_params: Sequence[tuple[str, str]] = (),
     ) -> str:
+        """Build the ``Authorization`` header.
+
+        Args:
+            method: Unused; a bearer token is not bound to the request.
+            url: Unused, for the same reason.
+            body_params: Unused, for the same reason.
+
+        Returns:
+            ``"Bearer <token>"``. Unlike an OAuth signature, this value is the
+            same for every request, so it must be protected in transit and
+            kept out of logs.
+        """
         return f"Bearer {self.token}"
 
     def get_base_url(self) -> str:

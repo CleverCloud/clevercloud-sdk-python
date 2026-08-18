@@ -105,6 +105,7 @@ class OAuthDance:
         )
 
     def close(self) -> None:
+        """Close the underlying HTTP client. Called on context-manager exit."""
         self._client.close()
 
     def __enter__(self) -> Self:
@@ -164,7 +165,18 @@ class OAuthDance:
         return dict(parse_qsl(response.text, keep_blank_values=True))
 
     def get_request_token(self) -> RequestToken:
-        """Step 1: get a temporary request token."""
+        """Step 1: get a temporary request token.
+
+        Returns:
+            The request token to pass to :meth:`get_authorization_url`, then to
+            :meth:`get_access_token`. Keep it for the whole dance: its secret
+            signs the final exchange, and its token validates the callback.
+
+        Raises:
+            OAuthError: If the API rejects the request, answers an incomplete
+                body, does not confirm the callback, or is unreachable. Check
+                ``.step`` to see which stage failed.
+        """
         url = f"{self._api_url}/v2/oauth/request_token"
         body = self._signed_params(url, {"oauth_callback": self._callback_url})
         params = self._post_form("/v2/oauth/request_token", body, step="request_token")
@@ -192,7 +204,16 @@ class OAuthDance:
         return RequestToken(token=token, secret=secret, callback_confirmed=confirmed)
 
     def get_authorization_url(self, request_token: RequestToken) -> str:
-        """Get the URL for browser-based authorization."""
+        """Get the URL to send the user to for authorization.
+
+        Args:
+            request_token: Token from :meth:`get_request_token`.
+
+        Returns:
+            The URL to open in a browser. Once the user approves, the API
+            redirects to the callback given to the constructor; pass that
+            callback URL to :meth:`parse_callback_url`.
+        """
         params = urlencode({"oauth_token": request_token.token})
         return f"{self._api_url}/v2/oauth/authorize?{params}"
 
@@ -201,6 +222,13 @@ class OAuthDance:
 
         Verifies that the callback carries the very token this dance requested,
         so a verifier obtained for another authorization cannot be injected.
+
+        Args:
+            callback_url: The full URL your callback received, query included.
+            request_token: The token returned by :meth:`get_request_token`.
+
+        Returns:
+            The verifier to pass to :meth:`get_access_token`.
 
         Raises:
             OAuthError: If the token does not match or the verifier is missing.
@@ -252,6 +280,14 @@ class OAuthDance:
             password: Account password.
             mfa_code: One-time code, when the account has MFA enabled.
             mfa_kind: MFA kind expected by the API (``"TOTP"`` by default).
+
+        Returns:
+            The OAuth verifier, to pass to :meth:`get_access_token`.
+
+        Raises:
+            OAuthError: If the credentials or the MFA code are rejected, if MFA
+                is required but no code was given, or if no verifier could be
+                obtained. ``.step`` names the stage that failed.
         """
         # Session cookies are kept by the HTTPX client itself: passing them
         # per-request is deprecated and makes persistence ambiguous.
@@ -332,7 +368,23 @@ class OAuthDance:
         request_token: RequestToken,
         verifier: str,
     ) -> OAuthCredentials:
-        """Step 3: exchange the request token and verifier for final credentials."""
+        """Step 3: exchange the request token and verifier for credentials.
+
+        Args:
+            request_token: Token from :meth:`get_request_token`.
+            verifier: Verifier from :meth:`parse_callback_url` or
+                :meth:`login`.
+
+        Returns:
+            Long-lived credentials, ready to be passed to
+            :class:`CleverCloudClient`. Store all four values: the consumer
+            pair is needed to sign requests, not only the access token.
+
+        Raises:
+            OAuthError: If the exchange is rejected — commonly an expired
+                request token or a verifier already used — or if the response
+                is incomplete.
+        """
         url = f"{self._api_url}/v2/oauth/access_token"
         body = self._signed_params(
             url,
