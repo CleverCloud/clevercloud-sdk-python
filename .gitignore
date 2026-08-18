@@ -19,3 +19,8 @@ venv/
 
 # uv
 uv.lock
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
