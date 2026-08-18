@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import email.utils
+import math
 import random
 import re
 import ssl
@@ -90,10 +91,18 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
         return None
     raw = raw.strip()
     try:
-        return max(0.0, float(raw))
+        seconds = float(raw)
     except ValueError:
         pass
-    parsed = email.utils.parsedate_to_datetime(raw)
+    else:
+        # NaN and infinity parse as floats but are not usable delays.
+        return max(0.0, seconds) if math.isfinite(seconds) else None
+    try:
+        parsed = email.utils.parsedate_to_datetime(raw)
+    except (ValueError, TypeError, OverflowError):
+        # The header is server-controlled: a malformed value is treated as
+        # absent rather than allowed to escape and cancel the retry.
+        return None
     if parsed is None:
         return None
     if parsed.tzinfo is None:
@@ -294,11 +303,19 @@ class CleverCloudClient:
 
         content_type = response.headers.get("content-type", "")
         if "json" in content_type:
+            decode_error: str | None = None
             try:
                 return response.json()
             except ValueError as exc:
-                msg = f"Server returned an undecodable JSON body: {exc}"
-                raise InvalidResponseError(msg, response_body=body) from exc
+                # Only keep the reason as a string. A JSONDecodeError holds the
+                # entire payload in its .doc attribute, and raising from inside
+                # this block would keep that object reachable through __cause__
+                # *and* __context__, defeating the truncation below.
+                decode_error = str(exc)
+            # Raised outside the except block, so no exception context is
+            # attached and the undecoded payload is not retained.
+            msg = f"Server returned an undecodable JSON body: {decode_error}"
+            raise InvalidResponseError(msg, response_body=body)
         return body
 
     async def _request(

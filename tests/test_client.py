@@ -704,3 +704,56 @@ class TestClientLifecycle:
             await client.get_profile()
         async with client:
             assert (await client.get_profile()).id == "user_1"
+
+
+class TestNoBodyRetentionThroughCause:
+    """A truncated body must not stay reachable through the exception chain."""
+
+    async def test_invalid_json_body_is_not_retained_by_the_cause(
+        self, make_client: Callable[..., CleverCloudClient]
+    ) -> None:
+        # A JSONDecodeError keeps the whole payload in its .doc attribute.
+        big = "{" + "x" * 200_000
+        client = make_client(
+            lambda r: httpx.Response(
+                200, content=big.encode(), headers={"content-type": "application/json"}
+            )
+        )
+        async with client:
+            with pytest.raises(InvalidResponseError) as excinfo:
+                await client.get_profile()
+
+        error = excinfo.value
+        assert len(error.response_body) < 3000
+        assert error.__cause__ is None
+        assert error.__context__ is None or not hasattr(error.__context__, "doc")
+
+    async def test_invalid_json_message_stays_informative(
+        self, make_client: Callable[..., CleverCloudClient]
+    ) -> None:
+        """Suppressing the cause must not cost the failure position."""
+        client = make_client(
+            lambda r: httpx.Response(
+                200, content=b"{not json", headers={"content-type": "application/json"}
+            )
+        )
+        async with client:
+            with pytest.raises(InvalidResponseError, match="line 1 column"):
+                await client.get_profile()
+
+    async def test_secret_in_an_invalid_body_is_not_reachable_from_the_chain(
+        self, make_client: Callable[..., CleverCloudClient]
+    ) -> None:
+        payload = '{"token": "SUPER_SECRET_VALUE", ' + "x" * 5000
+        client = make_client(
+            lambda r: httpx.Response(
+                200,
+                content=payload.encode(),
+                headers={"content-type": "application/json"},
+            )
+        )
+        async with client:
+            with pytest.raises(InvalidResponseError) as excinfo:
+                await client.get_profile()
+        assert "SUPER_SECRET_VALUE" not in str(excinfo.value)
+        assert excinfo.value.__cause__ is None

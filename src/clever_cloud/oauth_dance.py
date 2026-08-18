@@ -10,6 +10,8 @@ import base64
 import hmac
 import secrets
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Self
@@ -149,12 +151,23 @@ class OAuthDance:
             signature = base64.b64encode(digest).decode("ascii")
         return {**params, "oauth_signature": signature}
 
-    def _post_form(self, path: str, body: dict[str, str], *, step: str) -> dict[str, str]:
+    @contextmanager
+    def _transport_errors_as_oauth(self, step: str) -> Iterator[None]:
+        """Translate a network failure into an :class:`OAuthError` for ``step``.
+
+        Every HTTP call of the dance goes through this, so a connection or TLS
+        failure never escapes the documented SDK error hierarchy as a raw
+        ``httpx`` exception.
+        """
         try:
-            response = self._client.post(path, data=body, headers=_FORM_HEADERS)
+            yield
         except httpx.TransportError as exc:
             msg = f"Network failure during {step}: {type(exc).__name__}: {exc}"
             raise OAuthError(msg, step=step) from exc
+
+    def _post_form(self, path: str, body: dict[str, str], *, step: str) -> dict[str, str]:
+        with self._transport_errors_as_oauth(step):
+            response = self._client.post(path, data=body, headers=_FORM_HEADERS)
 
         if response.status_code != 200:
             raise OAuthError(
@@ -291,12 +304,13 @@ class OAuthDance:
         """
         # Session cookies are kept by the HTTPX client itself: passing them
         # per-request is deprecated and makes persistence ambiguous.
-        login_response = self._client.post(
-            "/v2/sessions/login",
-            data={"email": email, "pass": password, "from_authorize": "true"},
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            follow_redirects=False,
-        )
+        with self._transport_errors_as_oauth("login"):
+            login_response = self._client.post(
+                "/v2/sessions/login",
+                data={"email": email, "pass": password, "from_authorize": "true"},
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                follow_redirects=False,
+            )
 
         # A 200 means the MFA form was returned instead of a session redirect.
         if login_response.status_code == 200:
@@ -306,16 +320,17 @@ class OAuthDance:
                     step="login",
                     details="Please provide the mfa_code parameter",
                 )
-            mfa_response = self._client.post(
-                "/v2/sessions/mfa_login",
-                data={
-                    "mfa_attempt": mfa_code,
-                    "mfa_kind": mfa_kind,
-                    "email": email,
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                follow_redirects=False,
-            )
+            with self._transport_errors_as_oauth("mfa_login"):
+                mfa_response = self._client.post(
+                    "/v2/sessions/mfa_login",
+                    data={
+                        "mfa_attempt": mfa_code,
+                        "mfa_kind": mfa_kind,
+                        "email": email,
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    follow_redirects=False,
+                )
             if mfa_response.status_code == 401:
                 raise OAuthError(
                     "Invalid MFA code", step="mfa_login", details=mfa_response.text
@@ -339,22 +354,24 @@ class OAuthDance:
                 details=login_response.text,
             )
 
-        auth_response = self._client.get(
-            "/v2/oauth/authorize",
-            params={"oauth_token": request_token.token},
-            follow_redirects=False,
-        )
+        with self._transport_errors_as_oauth("authorize"):
+            auth_response = self._client.get(
+                "/v2/oauth/authorize",
+                params={"oauth_token": request_token.token},
+                follow_redirects=False,
+            )
         verifier = self._verifier_from_redirect(auth_response, request_token)
         if verifier:
             return verifier
 
         # HTTP 200 means the consent screen was returned: approve it explicitly.
         if auth_response.status_code == 200:
-            approve_response = self._client.post(
-                "/v2/oauth/authorize",
-                data={"oauth_token": request_token.token},
-                follow_redirects=False,
-            )
+            with self._transport_errors_as_oauth("authorize"):
+                approve_response = self._client.post(
+                    "/v2/oauth/authorize",
+                    data={"oauth_token": request_token.token},
+                    follow_redirects=False,
+                )
             verifier = self._verifier_from_redirect(approve_response, request_token)
             if verifier:
                 return verifier
@@ -378,7 +395,9 @@ class OAuthDance:
         Returns:
             Long-lived credentials, ready to be passed to
             :class:`CleverCloudClient`. Store all four values: the consumer
-            pair is needed to sign requests, not only the access token.
+            pair is needed to sign requests, not only the access token. Their
+            ``base_url`` points at the API root that issued them, so a private
+            deployment keeps being addressed.
 
         Raises:
             OAuthError: If the exchange is rejected — commonly an expired
@@ -407,6 +426,10 @@ class OAuthDance:
             consumer_secret=self._consumer.secret,
             token=token,
             secret=secret,
+            # Pin the API root that issued the token: handing these credentials
+            # to CleverCloudClient must not send them to the public API when
+            # they came from a private deployment.
+            base_url=self._api_url,
             signature_method=self._signature_method,
             expiration_date=_parse_expiration(params.get("expiration_date")),
         )

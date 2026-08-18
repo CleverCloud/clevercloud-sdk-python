@@ -184,3 +184,49 @@ class TestRetryAfterParsing:
             with pytest.raises(RateLimitError) as excinfo:
                 await client.get_profile()
         assert excinfo.value.retry_after is not None
+
+
+class TestMalformedRetryAfter:
+    """A server-controlled header must never escape the error hierarchy."""
+
+    @pytest.mark.parametrize(
+        "value", ["bogus", "Mon, 32 Foo 2026 99:99:99 GMT", "", "   ", "NaN", "1e999"]
+    )
+    def test_malformed_value_is_treated_as_absent(self, value: str) -> None:
+        response = httpx.Response(429, headers={"retry-after": value})
+        assert _retry_after_seconds(response) is None
+
+    async def test_malformed_value_does_not_cancel_the_retry(
+        self, token_auth: ApiTokenCredentials
+    ) -> None:
+        """A 503 with `Retry-After: bogus` used to raise ValueError instead."""
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            if len(calls) == 1:
+                return httpx.Response(503, headers={"retry-after": "bogus"})
+            return httpx.Response(200, json={"id": "u", "email": "e@x.test"})
+
+        client = CleverCloudClient(
+            token_auth,
+            base_url=BASE_URL,
+            max_retries=1,
+            max_retry_wait=0,
+            transport=httpx.MockTransport(handler),
+        )
+        async with client:
+            profile = await client.get_profile()
+        assert profile.id == "u"
+        assert len(calls) == 2
+
+    async def test_malformed_value_on_429_still_raises_the_sdk_error(
+        self, make_client: Callable[..., CleverCloudClient]
+    ) -> None:
+        client = make_client(
+            lambda r: httpx.Response(429, headers={"retry-after": "bogus"})
+        )
+        async with client:
+            with pytest.raises(RateLimitError) as excinfo:
+                await client.get_profile()
+        assert excinfo.value.retry_after is None

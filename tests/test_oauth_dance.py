@@ -401,3 +401,119 @@ class TestDanceRedaction:
         error = OAuthError("failed", step="login", details="x" * 100_000)
         assert error.details is not None
         assert len(error.details) < 3000
+
+
+class TestLoginTransportErrors:
+    """Every dance call must translate a network failure into an OAuthError."""
+
+    @pytest.fixture
+    def token(self) -> RequestToken:
+        return RequestToken(token="req-token", secret="req-secret")
+
+    def _failing_at(self, failing_path: str) -> Handler:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == failing_path:
+                raise httpx.ConnectError("connection refused")
+            if request.url.path == "/v2/sessions/login":
+                return httpx.Response(200, text="<mfa form>")
+            if request.url.path == "/v2/sessions/mfa_login":
+                return httpx.Response(303, headers={"location": "/"})
+            return httpx.Response(200, text="<consent form>")
+
+        return handler
+
+    def test_login_network_failure(self, token: RequestToken) -> None:
+        with make_dance(self._failing_at("/v2/sessions/login")) as dance:
+            with pytest.raises(OAuthError) as excinfo:
+                dance.login(token, email="a@b.test", password="pw")
+        assert excinfo.value.step == "login"
+        assert "ConnectError" in excinfo.value.message
+
+    def test_mfa_network_failure(self, token: RequestToken) -> None:
+        with make_dance(self._failing_at("/v2/sessions/mfa_login")) as dance:
+            with pytest.raises(OAuthError) as excinfo:
+                dance.login(token, email="a@b.test", password="pw", mfa_code="123456")
+        assert excinfo.value.step == "mfa_login"
+
+    def test_authorize_network_failure(self, token: RequestToken) -> None:
+        with make_dance(self._failing_at("/v2/oauth/authorize")) as dance:
+            with pytest.raises(OAuthError) as excinfo:
+                dance.login(token, email="a@b.test", password="pw", mfa_code="123456")
+        assert excinfo.value.step == "authorize"
+
+    def test_approve_network_failure(self, token: RequestToken) -> None:
+        """The consent POST is the fourth call and was unguarded too."""
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(f"{request.method} {request.url.path}")
+            if request.url.path == "/v2/sessions/login":
+                return httpx.Response(303, headers={"location": "/"})
+            if request.method == "GET":
+                return httpx.Response(200, text="<consent form>")
+            raise httpx.ReadTimeout("timeout")
+
+        with make_dance(handler) as dance:
+            with pytest.raises(OAuthError) as excinfo:
+                dance.login(token, email="a@b.test", password="pw")
+        assert excinfo.value.step == "authorize"
+
+    def test_no_raw_httpx_error_escapes(self, token: RequestToken) -> None:
+        """Nothing outside the SDK hierarchy reaches the caller."""
+        from clever_cloud import CleverCloudError
+
+        with make_dance(self._failing_at("/v2/sessions/login")) as dance:
+            with pytest.raises(CleverCloudError):
+                dance.login(token, email="a@b.test", password="pw")
+
+
+class TestCredentialsTargetTheIssuingApi:
+    """Credentials must keep addressing the deployment that issued them."""
+
+    @pytest.fixture
+    def token(self) -> RequestToken:
+        return RequestToken(token="req-token", secret="req-secret")
+
+    def _access_token_handler(self) -> Handler:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text="oauth_token=access&oauth_token_secret=s")
+
+        return handler
+
+    def test_custom_api_root_is_preserved(self, token: RequestToken) -> None:
+        with make_dance(self._access_token_handler()) as dance:
+            credentials = dance.get_access_token(token, "v")
+        assert credentials.base_url == API_URL
+        assert credentials.get_base_url() == API_URL
+
+    def test_default_api_root_is_unchanged(self, token: RequestToken) -> None:
+        dance = OAuthDance(
+            CONSUMER, transport=httpx.MockTransport(self._access_token_handler())
+        )
+        with dance:
+            credentials = dance.get_access_token(token, "v")
+        assert credentials.get_base_url() == "https://api.clever-cloud.com"
+
+    async def test_client_handoff_targets_the_private_deployment(
+        self, token: RequestToken
+    ) -> None:
+        """The full flow: dance on a private root, then use the credentials."""
+        from clever_cloud import CleverCloudClient
+
+        with make_dance(self._access_token_handler()) as dance:
+            credentials = dance.get_access_token(token, "v")
+
+        seen: list[httpx.Request] = []
+
+        def api_handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, json={"id": "u_1", "email": "u@example.test"})
+
+        # No base_url passed: the client must follow the credentials.
+        async with CleverCloudClient(
+            credentials, transport=httpx.MockTransport(api_handler)
+        ) as client:
+            await client.get_profile()
+
+        assert str(seen[0].url).startswith(API_URL)
+        assert "api.clever-cloud.com" not in str(seen[0].url)
