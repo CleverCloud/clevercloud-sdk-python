@@ -128,6 +128,11 @@ class TestDomain:
         with pytest.raises(InvalidResponseError, match="'fqdn'"):
             Domain.from_api_response({})
 
+    @pytest.mark.parametrize("fqdn", ["/", "///"])
+    def test_slash_only_fqdn_is_rejected(self, fqdn: str) -> None:
+        with pytest.raises(InvalidResponseError, match="'fqdn'"):
+            Domain.from_api_response({"fqdn": fqdn})
+
 
 class TestTcpRedirection:
     def test_parses_namespace_and_port(self) -> None:

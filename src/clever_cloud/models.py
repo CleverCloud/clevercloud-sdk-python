@@ -176,8 +176,12 @@ class Domain:
     @classmethod
     def from_api_response(cls, data: Any, *, is_primary: bool = False) -> Self:
         data = _mapping(data, model="Domain")
+        fqdn = _require_str(data, "fqdn", model="Domain").rstrip("/")
+        if not fqdn:
+            msg = "Domain: missing or invalid required field 'fqdn'"
+            raise InvalidResponseError(msg)
         return cls(
-            domain=_require_str(data, "fqdn", model="Domain").rstrip("/"),
+            domain=fqdn,
             is_primary=is_primary,
         )
 
