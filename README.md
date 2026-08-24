@@ -142,6 +142,7 @@ features:
 - Create application
 - Redeploy application
 - Create TCP redirection
+- Add a domain to an application
 - List domains
 - Get primary domain
 - Custom CA bundle and mTLS client certificate support

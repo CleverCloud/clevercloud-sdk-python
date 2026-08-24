@@ -533,6 +533,53 @@ class TestTlsConfiguration:
 
 
 class TestEndpoints:
+    async def test_create_domain(
+        self,
+        make_client: Callable[..., CleverCloudClient],
+        record_requests: tuple[list[httpx.Request], Callable[..., object]],
+    ) -> None:
+        seen, factory = record_requests
+        client = make_client(factory(200, {"fqdn": "app.example.test"}))
+        async with client:
+            domain = await client.create_domain(
+                "orga_1", "app_1", domain="app.example.test"
+            )
+        assert domain.domain == "app.example.test"
+        assert domain.is_primary is False
+        assert seen[0].method == "PUT"
+        assert seen[0].url.path.endswith("/vhosts/app.example.test")
+
+    async def test_create_domain_accepts_an_empty_body(
+        self, make_client: Callable[..., CleverCloudClient]
+    ) -> None:
+        """Some deployments answer the PUT with no content."""
+        client = make_client(lambda r: httpx.Response(200))
+        async with client:
+            domain = await client.create_domain(
+                "orga_1", "app_1", domain="app.example.test/"
+            )
+        assert domain.domain == "app.example.test"
+
+    async def test_create_domain_encodes_a_path_suffix(
+        self,
+        make_client: Callable[..., CleverCloudClient],
+        record_requests: tuple[list[httpx.Request], Callable[..., object]],
+    ) -> None:
+        """A path suffix belongs to the vhost name, not to the request route."""
+        seen, factory = record_requests
+        client = make_client(factory(200))
+        async with client:
+            await client.create_domain("orga_1", "app_1", domain="example.test/api")
+        assert seen[0].url.raw_path.endswith(b"/vhosts/example.test%2Fapi")
+
+    async def test_create_domain_rejects_an_empty_name(
+        self, make_client: Callable[..., CleverCloudClient]
+    ) -> None:
+        client = make_client(lambda r: httpx.Response(200))
+        async with client:
+            with pytest.raises(ValueError, match="domain"):
+                await client.create_domain("orga_1", "app_1", domain="/")
+
     async def test_list_domains(
         self, make_client: Callable[..., CleverCloudClient]
     ) -> None:

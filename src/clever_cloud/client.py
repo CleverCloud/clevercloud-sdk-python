@@ -631,6 +631,48 @@ class CleverCloudClient:
         )
         return TcpRedirection.from_api_response(data)
 
+    async def create_domain(
+        self,
+        owner_id: str,
+        app_id: str,
+        *,
+        domain: str,
+    ) -> Domain:
+        """Attach a domain (vhost) to an application.
+
+        Args:
+            owner_id: Organisation or user ID that owns the application
+            app_id: Application ID to attach the domain to
+            domain: Fully-qualified domain name, e.g. ``"app.example.com"``.
+                The platform also accepts a wildcard (``"*.example.com"``) and
+                a path suffix (``"example.com/api"``). A trailing slash is
+                ignored, so the value round-trips with :attr:`Domain.domain`.
+
+        Returns:
+            The domain now attached to the application. This endpoint answers
+            with an empty body on some deployments; the returned value is then
+            built from the requested name.
+
+        Raises:
+            ValueError: If ``domain`` is empty.
+            NotFoundError: If the organisation or the application does not
+                exist.
+            HttpError: If the domain is invalid, or is already attached to
+                another application.
+        """
+        owner = encode_path_segment(owner_id, name="owner_id")
+        app = encode_path_segment(app_id, name="app_id")
+        # Stripped before encoding: a trailing slash would otherwise survive as
+        # %2F and reach the API as part of the name.
+        fqdn = domain.rstrip("/") if isinstance(domain, str) else domain
+        vhost = encode_path_segment(fqdn, name="domain")
+        data = await self._request(
+            "PUT", f"/v2/organisations/{owner}/applications/{app}/vhosts/{vhost}"
+        )
+        if data is None:
+            return Domain(domain=fqdn, is_primary=False)
+        return Domain.from_api_response(data)
+
     async def list_domains(self, owner_id: str, app_id: str) -> list[Domain]:
         """List all domains (vhosts) for an application.
 
