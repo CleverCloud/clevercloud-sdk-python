@@ -53,7 +53,7 @@ from clever_cloud.models import (
 )
 from clever_cloud.oauth_dance import OAuthConsumer, OAuthDance, RequestToken
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "ApiTokenCredentials",

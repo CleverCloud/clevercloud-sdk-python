@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "clevercloud-sdk"
-version = "0.2.0"
+version = "0.2.1"
 description = "Python SDK for Clever Cloud"
 readme = "README.md"
 license = "Apache-2.0"
