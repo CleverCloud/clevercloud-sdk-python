@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.1
+
+Addresses [issue #9](https://github.com/CleverCloud/clevercloud-sdk-python/issues/9),
+which reported how `Domain` parses its payload and the absence of a method to
+attach a domain to an application.
+
+### Fixed
+
+- A domain whose `fqdn` is only slashes no longer yields `Domain(domain="")`.
+  `Domain.from_api_response()` validated the raw field and stripped the trailing
+  slashes afterwards, so `{"fqdn": "/"}` passed validation. The stripped value is
+  what gets validated now, and it raises the same `InvalidResponseError` as a
+  missing field.
+
+### Added
+
+- `create_domain()` attaches a domain (vhost) to an application. The name is
+  stripped of its trailing slash before being percent-encoded, so it round-trips
+  with `Domain.domain` and a path suffix such as `example.com/api` stays part of
+  the vhost name. Deployments that answer with an empty body are supported: the
+  returned `Domain` then carries the requested name.
+
 ## 0.2.0
 
 Addresses the security, correctness and design audit tracked in
