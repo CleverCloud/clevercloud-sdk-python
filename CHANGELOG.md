@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## 0.2.1
 
+Addresses [issue #9](https://github.com/CleverCloud/clevercloud-sdk-python/issues/9),
+which reported how `Domain` parses its payload and the absence of a method to
+attach a domain to an application.
+
 ### Fixed
 
 - A domain whose `fqdn` is only slashes no longer yields `Domain(domain="")`.
