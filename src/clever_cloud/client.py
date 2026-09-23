@@ -649,9 +649,10 @@ class CleverCloudClient:
                 ignored, so the value round-trips with :attr:`Domain.domain`.
 
         Returns:
-            The domain now attached to the application. This endpoint answers
-            with an empty body on some deployments; the returned value is then
-            built from the requested name.
+            The domain now attached to the application. The API answers with a
+            status message (``{"id", "message", "type"}``) or an empty body
+            rather than the vhost, so the returned value is built from the
+            requested name.
 
         Raises:
             ValueError: If ``domain`` is empty.
@@ -659,6 +660,9 @@ class CleverCloudClient:
                 exist.
             HttpError: If the domain is invalid, or is already attached to
                 another application.
+            InvalidResponseError: If the API answers with a message whose
+                ``type`` is ``"error"`` despite a successful status, or with a
+                body that is neither a message nor a vhost.
         """
         owner = encode_path_segment(owner_id, name="owner_id")
         app = encode_path_segment(app_id, name="app_id")
@@ -671,7 +675,16 @@ class CleverCloudClient:
         )
         if data is None:
             return Domain(domain=fqdn, is_primary=False)
-        return Domain.from_api_response(data)
+        if isinstance(data, dict) and "fqdn" in data:
+            return Domain.from_api_response(data)
+        # The documented answer is a status message, not the vhost.
+        if isinstance(data, dict) and "type" in data:
+            if data["type"] == "error":
+                msg = f"Domain {fqdn!r} was not attached: {data.get('message')!r}"
+                raise InvalidResponseError(msg, response_body=str(data))
+            return Domain(domain=fqdn, is_primary=False)
+        msg = f"Domain: unexpected response to the attach request: {data!r}"
+        raise InvalidResponseError(msg, response_body=str(data))
 
     async def list_domains(self, owner_id: str, app_id: str) -> list[Domain]:
         """List all domains (vhosts) for an application.
