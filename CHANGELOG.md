@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- `create_domain()` no longer fails on every real call. The API answers the
+  `PUT` with a status message (`{"id", "message", "type"}`), not the vhost, and
+  the method tried to parse it as a `Domain`, raising `InvalidResponseError`.
+  The message is now accepted and the returned `Domain` carries the requested
+  name; a message whose `type` is `"error"` raises `InvalidResponseError`
+  instead of being reported as a success. Reported in
+  [issue #9](https://github.com/CleverCloud/clevercloud-sdk-python/issues/9).
+
 ## 0.2.1
 
 Addresses [issue #9](https://github.com/CleverCloud/clevercloud-sdk-python/issues/9),

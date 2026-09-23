@@ -560,6 +560,43 @@ class TestEndpoints:
             )
         assert domain.domain == "app.example.test"
 
+    async def test_create_domain_accepts_a_status_message(
+        self, make_client: Callable[..., CleverCloudClient]
+    ) -> None:
+        """The API answers the PUT with a message, not the vhost (issue #9)."""
+        client = make_client(
+            lambda r: httpx.Response(
+                200, json={"id": 0, "message": "The vhost was added", "type": "success"}
+            )
+        )
+        async with client:
+            domain = await client.create_domain(
+                "orga_1", "app_1", domain="app.example.test/"
+            )
+        assert domain.domain == "app.example.test"
+        assert domain.is_primary is False
+
+    async def test_create_domain_rejects_an_error_message(
+        self, make_client: Callable[..., CleverCloudClient]
+    ) -> None:
+        """An error message must not be reported as an attached domain."""
+        client = make_client(
+            lambda r: httpx.Response(
+                200, json={"id": 0, "message": "vhost refused", "type": "error"}
+            )
+        )
+        async with client:
+            with pytest.raises(InvalidResponseError, match="vhost refused"):
+                await client.create_domain("orga_1", "app_1", domain="app.example.test")
+
+    async def test_create_domain_rejects_an_unknown_body(
+        self, make_client: Callable[..., CleverCloudClient]
+    ) -> None:
+        client = make_client(lambda r: httpx.Response(200, json=["app.example.test"]))
+        async with client:
+            with pytest.raises(InvalidResponseError):
+                await client.create_domain("orga_1", "app_1", domain="app.example.test")
+
     async def test_create_domain_encodes_a_path_suffix(
         self,
         make_client: Callable[..., CleverCloudClient],
