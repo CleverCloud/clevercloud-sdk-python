@@ -2,7 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 0.2.2
+
+Follows up on [issue #9](https://github.com/CleverCloud/clevercloud-sdk-python/issues/9):
+`create_domain()`, added in 0.2.1, failed against the real API.
 
 ### Fixed
 
